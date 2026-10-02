@@ -1,8 +1,8 @@
-"""DuckDuckGo search with retry logic and fallback"""
+"""Google News RSS search with retry logic"""
 
 import re
 from typing import List, Dict
-import requests
+import feedparser
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from core.config import MAX_RESULTS_PER_QUERY, MAX_BODY_CHARS
 
@@ -19,66 +19,42 @@ def clip(text: str, n: int) -> str:
     retry=retry_if_exception_type(Exception)
 )
 def ddg_search(query: str) -> List[Dict[str, str]]:
-    """Search DuckDuckGo using direct HTTP API"""
+    """Search Google News RSS for actual news articles"""
     query = clip(query, 200)
     results: List[Dict[str, str]] = []
 
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        # Google News RSS feed for search query
+        url = f"https://news.google.com/rss/search?q={query.replace(' ', '+')}"
 
-        # Try DuckDuckGo instant answer API
-        url = "https://api.duckduckgo.com/"
-        params = {
-            'q': query,
-            'format': 'json',
-            'no_redirect': '1',
-            'no_html': '1',
-            'skip_disambig': '1'
-        }
+        feed = feedparser.parse(url)
 
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
+        if not feed.entries:
+            print(f"  [news search] No results found for: {query[:40]}")
+            return []
 
-        data = response.json()
-
-        # Extract results from different sections
-        raw_results = []
-
-        # Get results from different DuckDuckGo response fields
-        if data.get('Results'):
-            raw_results.extend(data.get('Results', []))
-
-        if data.get('RelatedTopics'):
-            raw_results.extend(data.get('RelatedTopics', []))
-
-        # Process results
-        seen_urls = set()
-        for item in raw_results[:MAX_RESULTS_PER_QUERY * 2]:
-            if not isinstance(item, dict):
-                continue
-
+        # Process feed entries
+        for entry in feed.entries[:MAX_RESULTS_PER_QUERY * 2]:
             try:
-                title = item.get('Title', item.get('Text', ''))
-                url_val = item.get('URL', item.get('FirstURL', ''))
-                body = item.get('Text', title)
+                title = entry.get('title', '')
+                link = entry.get('link', '')
+                summary = entry.get('summary', '')
+                published = entry.get('published', '')
 
-                # Skip if no URL or title
-                if not (title and url_val):
+                if not (title and link):
                     continue
 
-                # Skip duplicates
-                if url_val in seen_urls:
-                    continue
+                # Extract date from published timestamp
+                date = published[:10] if published else ''
 
-                seen_urls.add(url_val)
+                # Clean summary (remove HTML tags)
+                summary_clean = re.sub(r'<[^>]+>', '', summary)
 
                 result = {
                     'title': clip(title, 100),
-                    'url': clip(url_val, 300),
-                    'body': clip(body, MAX_BODY_CHARS),
-                    'date': ''
+                    'url': clip(link, 300),
+                    'body': clip(summary_clean, MAX_BODY_CHARS),
+                    'date': date
                 }
 
                 results.append(result)
@@ -89,6 +65,11 @@ def ddg_search(query: str) -> List[Dict[str, str]]:
 
             except Exception as e:
                 continue
+
+        if results:
+            print(f"  [news search] Found {len(results)} articles for: {query[:40]}")
+        else:
+            print(f"  [news search] No valid entries for: {query[:40]}")
 
     except Exception as e:
         print(f"  [ddg_search failed] {query[:40]!r}: {type(e).__name__}")
