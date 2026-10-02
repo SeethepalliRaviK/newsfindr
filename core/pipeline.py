@@ -113,7 +113,8 @@ def run_pipeline_directly(interests: List[str], user_query: str) -> str:
     
     combined = []
     for q in queries:
-        combined.extend(json.loads(ddg_search(q)))
+        results = ddg_search(q)
+        combined.extend(results if isinstance(results, list) else [])
     print(f"Raw results: {len(combined)}")
     
     filtered = filter_with_llm(combined)
